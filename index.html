@@ -193,7 +193,7 @@
   <div class="grid">
     <!-- ДОБАВЛЕНИЕ РЕСУРСА -->
     <div class="card">
-      <h2>Новый ресурс</h2>
+      <h2 id="formTitle">Новый ресурс</h2>
       <label>Название</label>
       <input id="resName" placeholder="Например: Сундук, Доска, Железный слиток">
 
@@ -219,7 +219,10 @@
       <div id="ingList"></div>
       <button class="ghost" onclick="addIngRow()">+ добавить ингредиент</button>
       <div id="addWarn" class="warn" style="display:none"></div>
-      <button onclick="saveResource()" style="width:100%">Сохранить ресурс</button>
+      <div class="row">
+        <button id="saveBtn" onclick="saveResource()" style="width:100%">Сохранить ресурс</button>
+        <button id="cancelBtn" class="ghost" onclick="cancelEdit()" style="display:none;flex:0 0 110px">Отмена</button>
+      </div>
     </div>
 
     <!-- СПИСОК РЕСУРСОВ -->
@@ -293,7 +296,7 @@ function clearAll(){
   resources = [];
   nextId = 1;
   persist();
-  document.getElementById('ingList').innerHTML = '';
+  cancelEdit();
   document.getElementById('result').innerHTML = '';
   render();
   showNote('Всё очищено');
@@ -339,7 +342,7 @@ function importJSON(input){
       nextId = Math.max(0, ...clean.map(r=>r.id)) + 1;
       if(data.nextId && data.nextId > nextId) nextId = parseInt(data.nextId);
       persist();
-      document.getElementById('ingList').innerHTML = '';
+      cancelEdit();
       document.getElementById('result').innerHTML = '';
       render();
       showNote('Загружено рецептов: '+clean.length+' ✓');
@@ -454,16 +457,60 @@ function buildFilterPredicate(){
 
 /* ==================== РЕСУРСЫ ==================== */
 
+let editingId = null; // id ресурса, который сейчас редактируется (null = добавление)
+
 function addIngRow(selId, qty){
   const div = document.createElement('div');
   div.className = 'ing-row';
-  const opts = resources.map(r =>
+  // при редактировании ресурс не может быть ингредиентом самого себя
+  const avail = resources.filter(r => r.id !== editingId);
+  const opts = avail.map(r =>
     `<option value="${r.id}" ${r.id===selId?'selected':''}>${esc(r.name)}</option>`).join('');
   div.innerHTML = `
     <select>${opts || '<option value="">— нет ресурсов —</option>'}</select>
     <input type="number" min="0.01" step="any" value="${qty||1}" title="количество">
     <button class="del" onclick="this.parentElement.remove()">×</button>`;
   document.getElementById('ingList').appendChild(div);
+}
+
+function editResource(id){
+  const r = resources.find(x=>x.id===id);
+  if(!r) return;
+  editingId = id;
+
+  document.getElementById('resName').value = r.name;
+
+  // подбираем удобную единицу времени
+  let t = r.time, unit = 1;
+  if(t>0 && t%3600===0){ t = t/3600; unit = 3600; }
+  else if(t>0 && t%60===0){ t = t/60; unit = 60; }
+  document.getElementById('resTime').value = t;
+  document.getElementById('resTimeUnit').value = unit;
+
+  document.getElementById('resOutput').value = r.output;
+
+  document.getElementById('ingList').innerHTML = '';
+  r.ingredients.forEach(i => addIngRow(i.id, i.qty));
+
+  document.getElementById('formTitle').textContent = 'Редактирование: ' + r.name;
+  document.getElementById('saveBtn').textContent = 'Сохранить изменения';
+  document.getElementById('cancelBtn').style.display = 'block';
+  document.getElementById('addWarn').style.display = 'none';
+  document.getElementById('resName').focus();
+  document.getElementById('resName').scrollIntoView({behavior:'smooth', block:'center'});
+}
+
+function cancelEdit(){
+  editingId = null;
+  document.getElementById('resName').value = '';
+  document.getElementById('resTime').value = '0';
+  document.getElementById('resTimeUnit').value = '1';
+  document.getElementById('resOutput').value = '1';
+  document.getElementById('ingList').innerHTML = '';
+  document.getElementById('formTitle').textContent = 'Новый ресурс';
+  document.getElementById('saveBtn').textContent = 'Сохранить ресурс';
+  document.getElementById('cancelBtn').style.display = 'none';
+  document.getElementById('addWarn').style.display = 'none';
 }
 
 function esc(s){return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
@@ -473,7 +520,8 @@ function saveResource(){
   warn.style.display='none';
   const name = document.getElementById('resName').value.trim();
   if(!name){ warn.textContent='Укажи название ресурса.'; warn.style.display='block'; return; }
-  if(resources.some(r=>r.name.toLowerCase()===name.toLowerCase())){
+  // проверка дубликата: при редактировании не сравниваем с самим собой
+  if(resources.some(r=>r.name.toLowerCase()===name.toLowerCase() && r.id!==editingId)){
     warn.textContent='Ресурс с таким названием уже есть.'; warn.style.display='block'; return;
   }
   const t = parseFloat(document.getElementById('resTime').value)||0;
@@ -484,20 +532,33 @@ function saveResource(){
   document.querySelectorAll('#ingList .ing-row').forEach(row=>{
     const id = parseInt(row.querySelector('select').value);
     const q = parseFloat(row.querySelector('input').value);
-    if(id && q>0) ingredients.push({id, qty:q});
+    if(id && id!==editingId && q>0) ingredients.push({id, qty:q});
   });
-  resources.push({id:nextId++, name, time:t*unit, output, ingredients});
+
+  if(editingId !== null){
+    // обновляем существующий (id сохраняется — все ссылки в других рецептах остаются)
+    const r = resources.find(x=>x.id===editingId);
+    r.name = name;
+    r.time = t*unit;
+    r.output = output;
+    r.ingredients = ingredients;
+    showNote('Ресурс обновлён ✓');
+    cancelEdit();
+  } else {
+    resources.push({id:nextId++, name, time:t*unit, output, ingredients});
+    document.getElementById('resName').value='';
+    document.getElementById('resTime').value='0';
+    document.getElementById('resOutput').value='1';
+    document.getElementById('ingList').innerHTML='';
+  }
   persist();
-  document.getElementById('resName').value='';
-  document.getElementById('resTime').value='0';
-  document.getElementById('resOutput').value='1';
-  document.getElementById('ingList').innerHTML='';
   render();
 }
 
 function delResource(id){
   resources = resources.filter(r=>r.id!==id);
   resources.forEach(r=> r.ingredients = r.ingredients.filter(i=>i.id!==id));
+  if(editingId === id) cancelEdit();
   persist();
   render();
 }
@@ -564,7 +625,10 @@ function render(){
             &nbsp;·&nbsp; время: <b>${fmtTime(r.time)}</b>
           </div>
         </div>
-        <button class="tiny" onclick="delResource(${r.id})">удалить</button>
+        <div style="display:flex;gap:4px;flex-direction:column;align-items:flex-end">
+          <button class="tiny" style="color:var(--copper)" onclick="editResource(${r.id})">✎ изменить</button>
+          <button class="tiny" onclick="delResource(${r.id})">удалить</button>
+        </div>
       </div>`;
     }).join('');
   }
